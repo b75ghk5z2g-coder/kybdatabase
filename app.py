@@ -7,6 +7,7 @@ from fastapi.responses import HTMLResponse
 
 import db
 import search
+from skreg import screening
 
 app = FastAPI(title="KYB Databáza")
 _engine = db.engine()
@@ -67,9 +68,31 @@ async function showEntity(i){
 function truncate(s,n){return (s||"").length>n ? s.slice(0,n)+"…" : s;}
 function short(s){return (s||"").replace(/_/g," ").slice(0,26);}
 function escapeHtml(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+async function doScreen(){
+  const ico = document.getElementById("ico").value.trim();
+  if(!ico) return;
+  const st = document.getElementById("sverdict");
+  st.textContent = "="; st.style.color = "#777";
+  try {
+    const r = await j(`/api/screening?ico=${encodeURIComponent(ico)}`);
+    const col = r.verdict==="NEGATIVE" ? "#1E7B34" : (r.verdict.startsWith("CRITICAL") ? "#B71C1C" : "#E65100");
+    st.style.color = col;
+    st.textContent = `${r.verdict} (${r.risk_pct}%) · ${r.nazov||"neznámy"} · DIČ ${r.dic||"-"} · ${r.velkost||"-"}`;
+    let h = "";
+    if(r.person_hits && r.person_hits.length){
+      h = "<div class=hit>";
+      r.person_hits.forEach(p=>{ h += `<b>${escapeHtml(p.meno)}</b><br>`;
+        p.matches.forEach(m=>{ h += `&nbsp;→ ${escapeHtml(m.name)} (${m.score.toFixed(0)}%) ${escapeHtml(m.status||"")}<br>`; }); });
+      h += "</div>";
+    }
+    document.getElementById("sdetail").innerHTML = h;
+  } catch(err){ st.textContent = "chyba: "+err.message; }
+}
 document.addEventListener("DOMContentLoaded",()=>{
   document.getElementById("q").addEventListener("keydown",e=>{if(e.key==="Enter")doSearch();});
   document.getElementById("btn").addEventListener("click",doSearch);
+  document.getElementById("ico").addEventListener("keydown",e=>{if(e.key==="Enter")doScreen();});
+  document.getElementById("sbtn").addEventListener("click",doScreen);
 });
 </script>
 <style>
@@ -82,6 +105,9 @@ document.addEventListener("DOMContentLoaded",()=>{
 </head>
 <body>
 <h1>KYB Databáza</h1>
+<p><b>SK screening podľa IČO:</b> <input id="ico" placeholder="00151653"><button id="sbtn">Screenovať</button>
+<span id="sverdict" class="muted"></span></p>
+<div id="sdetail"></div>
 <input id="q" placeholder="hľadať firmu / osobu…"><button id="btn">Hľadať</button>
 <span id="status" class="muted"></span>
 <div id="results"></div>
@@ -123,6 +149,25 @@ def api_entity(entity_id: int):
 def api_rels(entity_id: int):
     rows = search.relationships(_engine, entity_id)
     return [dict(r) for r in rows]
+
+
+@app.get("/api/screening")
+def api_screening(ico: str):
+    r = screening.screen(_engine, ico)
+    status = r["verdict"]["status"]
+    return {
+        "ico": r["ico"], "nazov": r["nazov"], "verdict": status,
+        "risk_pct": r["verdict"]["risk_pct"],
+        "match_name": r["verdict"]["match_name"],
+        "dic": r["dic"], "velkost": r["velkost"],
+        "obrat": r["obrat"], "zakladne_imanie": r["zakladne_imanie"],
+        "register": r["register"], "vlozka": r["vlozka"],
+        "kuv": r["kuv"], "statutari": r["statutari"],
+        "shareholders": r["shareholders"],
+        "partner": r["partner_veren._sektora"],
+        "vymaz": r["vymaz"], "pokuta": r["pokuta"],
+        "person_hits": r["person_hits"],
+    }
 
 
 if __name__ == "__main__":

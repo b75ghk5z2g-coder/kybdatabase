@@ -33,6 +33,7 @@ python app.py                      # web prehliadač → http://localhost:8090
 - `GET /api/search?q=...` — fuzzy search (pg_trgm)
 - `GET /api/entity/{id}` — detail
 - `GET /api/rels/{id}` — vzťahy (vlastníctvo obojsmerne)
+- `GET /api/screening?ico=...` — SK screening: ORSR (štatutári/spoločníci), RPVS (KÚV), RÚZ (DIČ/obrat), mená osôb proti OFAC sankciám v DB; verdikt CRITICAL/HIGH/MEDIUM/LOW/NEGATIVE
 
 ## Štruktúra
 
