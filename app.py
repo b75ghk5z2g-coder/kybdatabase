@@ -7,7 +7,7 @@ from fastapi.responses import HTMLResponse
 
 import db
 import search
-from skreg import screening
+from skreg import network, screening
 
 app = FastAPI(title="KYB Databáza")
 _engine = db.engine()
@@ -23,6 +23,7 @@ BASE_HTML = """
 const API = "";
 async function j(u){const r=await fetch(u);if(!r.ok)throw new Error((await r.text()).slice(0,300));return r.json();}
 let results = [];
+let hist = [];
 async function doSearch(){
   const q = document.getElementById("q").value.trim();
   if(!q) return;
@@ -48,22 +49,51 @@ async function showEntity(i){
      <p class=muted>${escapeHtml(ed.entity_type)} · ${escapeHtml(ed.jurisdiction_code||"-")} ·
        ${escapeHtml(ed.registration_number||"-")} · ${escapeHtml(ed.status||"-")} · zdroj ${escapeHtml(ed.source||"-")}</p>
      <div id="graph"></div>`;
-  const rels = await j(`/api/rels/${e.id}`);
-  document.getElementById("graph").innerHTML = "";
-  if(!rels.length){ document.getElementById("graph").innerHTML = `<p class=muted>bez vzťahov — entita nie je ako vlastník a ani ako ovládaná v žiadnom zázname</p>`; return; }
-  const nodes = [{id:0, label: truncate(ed.name,22), color:{background:"#522E91",border:"#3A2066"}, font:{color:"#fff"}}];
-  const edges = []; let nid = 1;
-  const cmap = {};
-  rels.forEach(r=>{
-    const cid = cmap[r.counterparty] || (cmap[r.counterparty] = nid++);
+  drawGraph(e.id, ed.name, [e]);
+}
+async function drawGraph(id, label, path){
+  const rels = await j(`/api/rels/${id}`);
+  const el = document.getElementById("graph");
+  if(!rels.length){ el.innerHTML = `<p class=muted>bez vzťahov — entita nie je ako vlastník a ani ako ovládaná v žiadnom zázname</p>`; return; }
+  const CAP = 30, extra = rels.length - CAP;
+  const shown = extra>0 ? rels.slice(0,CAP) : rels;
+  const nodes = [{id:0, label:truncate(label,25), color:{background:"#522E91",border:"#3A2066"}, font:{color:"#fff"}}];
+  const edges = [];
+  const nid = {}; let next = 1;
+  shown.forEach(r=>{
+    const cid = nid[r.counterparty] || (nid[r.counterparty] = next++);
     if(!nodes.find(n=>n.id===cid))
-      nodes.push({id:cid, label:truncate(r.counterparty,22),
+      nodes.push({id:cid, label:truncate(r.counterparty,25),
         color: r.outgoing ? {background:"#EDE9F5",border:"#B9A7DB"} : {background:"#FDF3E3",border:"#E0B97A"}});
     if(r.outgoing) edges.push({from:0, to:cid, label:short(r.rel_type), arrows:"to"});
     else edges.push({from:cid, to:0, label:short(r.rel_type), arrows:"to", color:{color:"#C0392B"}});
   });
-  new vis.Network(document.getElementById("graph"),
-    {nodes, edges}, {physics:{enabled:false}, edges:{font:{size:10}}});
+  el.innerHTML = extra>0
+    ? `<p class=muted>zobrazujem ${CAP} z ${rels.length} vzťahov · klik na uzol = zanorenie doň</p>`
+    : `<p class=muted>klik na uzol = zanorenie doň · ← späť na predošlý</p>`;
+  const net = new vis.Network(el, {nodes, edges},
+    {physics:{solver:"barnesHut", stabilization:{iterations:150}},
+     edges:{font:{size:9}}, nodes:{font:{size:12}}});
+  net.on("click", p=>{
+    if(p.nodes && p.nodes[0]!==0){
+      const nm = nodes.find(n=>n.id===p.nodes[0]).label.replace(/…$/,"");
+      hist.push({id, label});
+      document.getElementById("back").style.display = "inline";
+      doDrill(nm);
+    }
+  });
+  path = path || [];
+}
+function goBack(){
+  const h = hist.pop();
+  if(h){ document.getElementById("back").style.display = hist.length ? "inline" : "none"; drawGraph(h.id, h.label); }
+}
+async function doDrill(name){
+  try {
+    const hits = await j(`/api/search?q=${encodeURIComponent(name)}&limit=3`);
+    if(hits[0]) showEntity(0, hits[0].name);
+    else document.getElementById("graph").innerHTML = `<p class=muted>subjekt nenájdený</p>`;
+  } catch(err){ document.getElementById("graph").innerHTML = `<p class=muted>chyba: ${escapeHtml(err.message)}</p>`; }
 }
 function truncate(s,n){return (s||"").length>n ? s.slice(0,n)+"…" : s;}
 function short(s){return (s||"").replace(/_/g," ").slice(0,26);}
@@ -88,11 +118,43 @@ async function doScreen(){
     document.getElementById("sdetail").innerHTML = h;
   } catch(err){ st.textContent = "chyba: "+err.message; }
 }
+async function doNet(){
+  const ico = document.getElementById("net_ico").value.trim();
+  const st = document.getElementById("netstatus");
+  if(!ico) return;
+  st.style.color = "#777"; st.textContent = "… ťahám ORSR (môže trvať 30-60s)";
+  try {
+    const r = await j(`/api/sk-network?ico=${encodeURIComponent(ico)}&depth=2`);
+    if(!r.ok){ st.style.color = "#B71C1C"; st.textContent = r.error || "chyba"; return; }
+    st.style.color = "#1E7B34";
+    st.textContent = `${r.name} · ${r.nodes.length} subjektov · ${r.edges.length} vzťahov (${r.profiles_fetched} ORSR profilov)`;
+    drawNetwork(r);
+  } catch(err){ st.style.color="#B71C1C"; st.textContent = "chyba: "+err.message; }
+}
+function drawNetwork(data){
+  document.getElementById("detail").innerHTML = `<h3>${escapeHtml(data.name)}</h3>
+    <p class=muted>SK vlastnícka sieť (ORSR, hĺbka ${data.depth})</p><div id="graph"></div>`;
+  const byId = {}; data.nodes.forEach(n=>byId[n.id]=n);
+  const nodes = data.nodes.map(n=>({
+    id:n.id, label:truncate(n.name,25),
+    shape: n.type==="person" ? "ellipse" : "box",
+    color: n.id===data.root_id
+      ? {background:"#522E91",border:"#3A2066"}
+      : (n.type==="person" ? {background:"#FDF3E3",border:"#E0B97A"} : {background:"#EDE9F5",border:"#B9A7DB"}),
+    font: n.id===data.root_id ? {color:"#fff"} : undefined
+  }));
+  const edges = data.edges.map(e=>({from:e.from, to:e.to, label:short(e.label||e.rel_type), arrows:"to",
+    color:{color:"#C0392B"}}));
+  new vis.Network(document.getElementById("graph"), {nodes, edges},
+    {physics:{solver:"barnesHut", stabilization:{iterations:200}}, edges:{font:{size:9}}, nodes:{font:{size:12}}});
+}
 document.addEventListener("DOMContentLoaded",()=>{
   document.getElementById("q").addEventListener("keydown",e=>{if(e.key==="Enter")doSearch();});
   document.getElementById("btn").addEventListener("click",doSearch);
   document.getElementById("ico").addEventListener("keydown",e=>{if(e.key==="Enter")doScreen();});
   document.getElementById("sbtn").addEventListener("click",doScreen);
+  document.getElementById("net_ico").addEventListener("keydown",e=>{if(e.key==="Enter")doNet();});
+  document.getElementById("netbtn").addEventListener("click",doNet);
 });
 </script>
 <style>
@@ -105,6 +167,8 @@ document.addEventListener("DOMContentLoaded",()=>{
 </head>
 <body>
 <h1>KYB Databáza</h1>
+<p><b>SK vlastnícka sieť (IČO):</b> <input id="net_ico" placeholder="31322832"><button id="netbtn">Sieť</button>
+<span id="netstatus" class="muted"></span></p>
 <p><b>SK screening podľa IČO:</b> <input id="ico" placeholder="00151653"><button id="sbtn">Screenovať</button>
 <span id="sverdict" class="muted"></span></p>
 <div id="sdetail"></div>
@@ -112,6 +176,7 @@ document.addEventListener("DOMContentLoaded",()=>{
 <span id="status" class="muted"></span>
 <div id="results"></div>
 <div id="detail"></div>
+     <a id="back" style="display:none;cursor:pointer;color:#522E91" onclick="goBack()">← späť</a>
 </body></html>
 """
 
@@ -168,6 +233,11 @@ def api_screening(ico: str):
         "vymaz": r["vymaz"], "pokuta": r["pokuta"],
         "person_hits": r["person_hits"],
     }
+
+
+@app.get("/api/sk-network")
+def api_sk_network(ico: str, depth: int = 2):
+    return network.build(_engine, ico, depth=max(1, min(depth, 3)))
 
 
 if __name__ == "__main__":

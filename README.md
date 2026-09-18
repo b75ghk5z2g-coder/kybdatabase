@@ -34,6 +34,7 @@ python app.py                      # web prehliadač → http://localhost:8090
 - `GET /api/entity/{id}` — detail
 - `GET /api/rels/{id}` — vzťahy (vlastníctvo obojsmerne)
 - `GET /api/screening?ico=...` — SK screening: ORSR (štatutári/spoločníci), RPVS (KÚV), RÚZ (DIČ/obrat), mená osôb proti OFAC sankciám v DB; verdikt CRITICAL/HIGH/MEDIUM/LOW/NEGATIVE
+- `GET /api/sk-network?ico=...&depth=2` — SK vlastnícka sieť: rekurzívne ORSR extract (spoločníci → ich IČO → …), uloží do DB (source `sk-orsr`) a vráti uzly/hrany pre graf. SK nemá hromadný export vlastníctva, sieť sa buduje na požiadanie.
 
 ## Štruktúra
 
