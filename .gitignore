@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+downloads/
+pgdata/
+*.log
+*_pid.txt
